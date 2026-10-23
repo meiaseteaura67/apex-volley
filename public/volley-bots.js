@@ -1,0 +1,7 @@
+'use strict';
+// All presets produce ordinary controls through the shared tactical controller.
+(()=>{
+const presets={easy:{character:'haru',maxTier:0,tacticalElo:600,name:'INICIANTE',speed:285,reaction:.24,error:55,reach:100,desc:'Mais tempo para reagir. Ideal para aprender os contatos.'},normal:{character:'haru',maxTier:0,tacticalElo:1100,name:'TÉCNICA',speed:355,reaction:.13,error:24,reach:106,desc:'Constrói jogadas, recebe e procura espaço na sua defesa.'},hard:{character:'jikyu',maxTier:0,tacticalElo:1400,name:'ELITE',speed:390,reaction:.075,error:11,reach:108,desc:'Antecipa a queda e ataca cedo. Pouco espaço para hesitar.'},pro:{character:'jikyu',maxTier:0,tacticalElo:1600,name:'PRO PLAYER',speed:390,reaction:.035,error:3,reach:110,desc:'Leitura preditiva, defesa com dash e ataques nos espaços.'},trick:{character:'tamakaze',maxTier:2,tacticalElo:1800,name:'TRICKSHOT',speed:390,reaction:.08,error:13,reach:108,desc:'Forte e ousada. Prepara lobs e curvas com carga e giro reais, sem cortadas fabricadas.'},protrick:{character:'tamakaze',maxTier:3,tacticalElo:2100,name:'PRO TRICKSHOT',speed:390,reaction:.095,error:0,reach:102,desc:'Tamakaze · prepara mais retornos e alterna largadinhas, fundo, lobs, cortadas rápidas e curvas nos dois sentidos.'}};
+for(const value of Object.values(presets))Object.freeze(value);Object.freeze(presets);
+globalThis.ApexVolleyBots=Object.freeze({presets});
+})();
