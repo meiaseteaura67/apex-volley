@@ -12,7 +12,7 @@ const blank=()=>({left:false,right:false,jump:false,attack:false,receive:false,s
 export class Match{
  constructor({id=randomUUID(),mode='1v1',players,ranked=false,training=false,onFinish=()=>{}}){
  this.id=id;this.mode=mode;this.ranked=ranked;this.training=training;this.onFinish=onFinish;this.kernel=globalThis.ApexV41Physics.create();this.tactics=globalThis.ApexVolleyTactics.create();this.time=0;this.score=[0,0];this.touches=[0,0];this.lastSide=-1;this.lastPlayer=null;this.lastContactTick=-1;this.serveSide=0;this.phase='serve';this.phaseTime=0;this.winner=null;this.results=null;this.events=[];this.eventSeq=0;this.replay=[];this.seed=randomInt(1,0x7fffffff);this.initialSeed=this.seed;this.convergenceUsed=[false,false];this.abandoned=new Set();this.pings=[];
- this.players=players.map(p=>({...this.kernel.makePlayer(p.side),...p,input:{...blank(),aim:p.side===0?-.3:-Math.PI+.3},previous:blank(),pendingInput:[],charge:0,charging:false,spinAge:99,spinDir:0,aimSamples:[],seq:-1,lastInput:0,cooldown:0,botNext:0,profile:BOT_PRESETS.find(b=>b.id===p.difficulty)||botProfile(p.elo??1000),disconnectedAt:null,notice:'',noticeUntil:0,lastHit:-1}));
+ this.players=players.map(p=>({...this.kernel.makePlayer(p.side),...p,input:{...blank(),aim:p.side===0?-.3:-Math.PI+.3},previous:blank(),pendingInput:[],charge:0,charging:false,spinAge:99,spinDir:0,aimSamples:[],seq:-1,processedSeq:-1,lastInput:0,cooldown:0,botNext:0,profile:BOT_PRESETS.find(b=>b.id===p.difficulty)||botProfile(p.elo??1000),disconnectedAt:null,notice:'',noticeUntil:0,lastHit:-1}));
  this.ratings=[0,1].map(side=>teamRating(this.players.filter(p=>p.side===side).map(p=>p.elo||1000)));this.setupServe();
  }
  random(){this.seed^=this.seed<<13;this.seed^=this.seed>>>17;this.seed^=this.seed<<5;return(this.seed>>>0)/4294967296;}
@@ -27,7 +27,7 @@ export class Match{
  if(!data||!Number.isInteger(data.seq)||data.seq<=p.seq||data.seq>p.seq+10000||!Number.isFinite(data.aim)||Math.abs(data.aim)>Math.PI+.001||!Number.isFinite(data.time)||Math.abs(data.time-now)>3000||p.pendingInput.length>=16)return false;
  const i=blank();for(const k of Object.keys(i))if(typeof i[k]==='boolean')i[k]=data[k]===true;i.aim=data.aim;i.direction=data.direction==='movement'?'movement':'look';
  if(data.aimUsed){if(!Number.isFinite(data.aimX)||!Number.isFinite(data.aimY)||data.aimX< -256||data.aimX>W+256||data.aimY< -1200||data.aimY>F+300)return false;i.aimX=data.aimX;i.aimY=data.aimY;}
- p.seq=data.seq;p.pendingInput.push(i);p.lastInput=this.time;
+ i.seq=data.seq;p.seq=data.seq;p.pendingInput.push(i);p.lastInput=this.time;
  if(this.replay.length>=72000){this.replay.splice(0,6000);this.replayPartial=true;}this.replay.push({t:Math.round(this.time*120),id,seq:data.seq,input:i});return true;
  }
  toss(p){if(this.phase!=='serve'||this.server.id!==p.id)return false;this.started=true;this.phase='rally';this.phaseTime=0;this.ball={x:p.x,y:F-112,vx:p.side?-18:32,vy:-610,spin:0,angle:0,last:p.side,side:p.side,touches:this.touches,blockCD:0,age:0,tier:0,curveTier:'none'};this.lastPlayer=p.id;this.event('toss',p);return true;}
@@ -36,15 +36,15 @@ export class Match{
  if(!block&&++this.touches[p.side]>3){this.point(1-p.side,'QUATRO TOQUES');return false;}
  this.ball.reversalTrack=null;this.ball.returnFlight=null;this.ball.reversal=false;this.lastPlayer=p.id;this.ball.last=p.side;this.ball.touches=this.touches;this.ball.age=0;p.lastHit=this.time;this.attraction=null;return true;
  }
- context(p){const i=p.input;this.kernel.context(this.ball,{x:i.aimUsed?i.aimX:this.ball.x+Math.cos(i.aim)*500,y:i.aimUsed?i.aimY:this.ball.y+Math.sin(i.aim)*500,used:i.aimUsed},{locked:i.locked,dx:Math.cos(i.aim)*230,dy:Math.sin(i.aim)*230});}
+ context(p,input=p.input){const i=input;this.kernel.context(this.ball,{x:i.aimUsed?i.aimX:this.ball.x+Math.cos(i.aim)*500,y:i.aimUsed?i.aimY:this.ball.y+Math.sin(i.aim)*500,used:i.aimUsed},{locked:i.locked,dx:Math.cos(i.aim)*230,dy:Math.sin(i.aim)*230});}
  hand(p,kind='attack'){return this.kernel.hand(p,kind);}
  intent(p,power,dist){return globalThis.ApexVolleyTactics.execution(p,power,dist,this.ball,this.time);}
 
  attack(p){const b=this.ball,h=this.hand(p),dist=Math.hypot(b.x-h.x,b.y-h.y),reach=102+(character(p.character).stats[3]-5)*1.5;
  if(this.phase!=='rally'||p.hitCD>0||dist>reach||b.y>p.y-35||(b.x<N?0:1)!==p.side)return false;
  if(!this.register(p))return false;
- const execution=p.buffer?.kind==='attack'&&p.buffer.samples?{...p,spinDir:p.buffer.spinDir,spinAge:p.buffer.spinAge,aimSamples:p.buffer.samples,intentAt:p.buffer.at}:p,power=p.buffer?.kind==='attack'?p.buffer.power:p.charge,intent=this.intent(execution,power,dist),angle=intent.tier===3?globalThis.ApexVolleyTactics.returnAim(p.buffer?.aim??p.input.aim,p.side):p.input.aim;
- this.context(p);if(intent.tier===3)this.kernel.context(b,{used:false},{locked:false});
+ const execution=p.buffer?.kind==='attack'&&p.buffer.samples?{...p,spinDir:p.buffer.spinDir,spinAge:p.buffer.spinAge,aimSamples:p.buffer.samples,intentAt:p.buffer.at}:p,power=p.buffer?.kind==='attack'?p.buffer.power:p.charge,intent=this.intent(execution,power,dist),release=p.buffer?.kind==='attack'?p.buffer.release:null,releaseAim=p.buffer?.aim??p.input.aim,angle=intent.tier===3?globalThis.ApexVolleyTactics.returnAim(releaseAim,p.side):releaseAim;
+ this.context(p,release||p.input);if(intent.tier===3)this.kernel.context(b,{used:false},{locked:false});
  const s=this.kernel.shot(p,intent.power??power,{x:b.x+Math.cos(angle)*500,y:b.y+Math.sin(angle)*500},intent.spin,false);
  const factor=intent.factor*(dist<49?1.025:1)*(1+(character(p.character).stats[0]-5)*.025);b.vx=s.vx*factor;b.vy=s.vy*factor;b.spin=s.spin;b.returnFlight=intent.returnFlight;b.tier=intent.tier;const proof=intent.tier===3?globalThis.ApexVolleyTactics.reversal(b):null;b.reversal=false;b.reversalTrack=globalThis.ApexVolleyTactics.beginReversal(b,proof);b.curveTier=intent.tier>=2?'technical':intent.tier?'base':'none';p.energy-=intent.cost;p.hitCD=.27;p.lastKind='attack';p.touchAnim=.2;
  const style=globalThis.ApexVolleyTactics.describeShot(b,p,{proof}),varied=p.bot&&p.profile?.id==='protrick';this.notice(p,varied?globalThis.ApexVolleyTactics.labels[style]:intent.tier>=2?'CURVA FORTE':'ATAQUE');this.event('attack',p,{type:'hit',tier:intent.tier,style,reversal:b.reversal,perfect:dist<49,power,x:b.x,y:b.y});return true;
@@ -69,7 +69,7 @@ export class Match{
  point(side,reason){if(this.phase!=='rally')return;this.score[side]++;this.serveSide=side;this.attraction=null;this.event('point',null,{type:'point',side,reason,x:this.ball.x,y:this.ball.y});if(!this.training&&this.score[side]>=11&&this.score[side]-this.score[1-side]>=2){this.end(side,reason);return;}this.phase='point';this.phaseTime=0;this.reason=reason;}
  end(side,reason='Fim de partida'){if(this.phase==='ended')return;this.winner=side;this.reason=reason;this.phase='ended';for(const p of this.players){p.input=blank();p.previous=blank();p.pendingInput=[];p.charging=false;p.charge=0;p.buffer=null;p.block=false;}this.onFinish(this);}
  disconnect(id){const p=this.players.find(p=>p.id===id);if(p&&p.disconnectedAt===null){p.disconnectedAt=this.time;p.input=blank();p.previous=blank();p.pendingInput=[];p.charging=false;p.buffer=null;}}
- reconnect(id){const p=this.players.find(p=>p.id===id);if(p){p.disconnectedAt=null;p.input=blank();p.previous=blank();p.pendingInput=[];}}
+ reconnect(id){const p=this.players.find(p=>p.id===id);if(p){p.disconnectedAt=null;p.input=blank();p.previous=blank();p.pendingInput=[];p.charging=false;p.charge=0;p.buffer=null;p.block=false;}}
  record(){return{id:this.id,engine:'v41-shared-gdd-0.7',mode:this.mode,ranked:this.ranked,placement:this.placement??null,players:this.players.map(({id,side,bot,elo,character,difficulty})=>({id,side,bot:!!bot,elo,character,difficulty})),ratings:this.ratings,score:this.score,winner:this.winner,abandoned:[...this.abandoned],seed:this.initialSeed,replay:this.replay,replayPartial:!!this.replayPartial,reason:this.reason};}
  ai(p,dt=STEP){p.input=this.tactics.decide({time:this.time,phaseTime:this.phaseTime,phase:this.phase,ball:this.ball,players:this.players,touches:this.touches,server:this.server.id},p);}
 
@@ -78,7 +78,7 @@ export class Match{
  const previousPlayers=this.players.map(p=>({x:p.x,y:p.y}));
  for(const p of this.players){
  if(p.disconnectedAt!==null&&this.time-p.disconnectedAt>30){this.abandoned.add(p.id);if(!this.started)this.ranked=false;this.end(1-p.side,'Abandono confirmado');return;}
- if(p.pendingInput.length)p.input=p.pendingInput.shift();if(p.bot||p.disconnectedAt!==null&&this.mode==='2v2')this.ai(p,dt);else if(this.time-p.lastInput>.35){p.input=blank();p.charging=false;p.buffer=null;}
+ if(p.pendingInput.length){p.input=p.pendingInput.shift();p.processedSeq=p.input.seq;}if(p.bot||p.disconnectedAt!==null&&this.mode==='2v2')this.ai(p,dt);else if(this.time-p.lastInput>.35){p.input=blank();p.charging=false;p.buffer=null;}
  const i=p.input,prev=p.previous,c=character(p.character),move=Number(i.right)-Number(i.left);p.cooldown=Math.max(0,p.cooldown-dt);if(i.cancel){p.charging=false;p.buffer=null;}
  if(i.jump&&!prev.jump){if(this.phase==='serve')this.toss(p);p.jumpbuf=.16;if(this.kernel.jump(p)){p.vy*=1+(c.stats[2]-5)*.025;this.event('jump',p);}}
  if(!i.jump&&prev.jump&&p.vy< -330)p.vy*=.68;
@@ -87,13 +87,13 @@ export class Match{
  if(i.attack&&!prev.attack){p.charging=true;p.charge=0;p.aimSamples=[];}if(p.charging)p.charge=Math.min(1.25,p.charge+dt);
  const spin=Number(i.spinR)-Number(i.spinL);if(spin&&spin!==p.spinDir)p.spinAge=0;else p.spinAge+=dt;p.spinDir=spin;
  p.aimSamples.push({t:this.time,a:i.aim});while(p.aimSamples.length&&p.aimSamples[0].t<this.time-.22)p.aimSamples.shift();
- if(!i.attack&&prev.attack&&p.charging&&!i.cancel){p.buffer={kind:'attack',life:.24,power:p.charge,aim:i.aim,spinDir:p.spinDir,spinAge:p.spinAge,samples:p.aimSamples.map(s=>({...s})),at:this.time};p.charging=false;}
+ if(!i.attack&&prev.attack&&p.charging&&!i.cancel){p.buffer={kind:'attack',life:.24,power:p.charge,release:{...i},aim:i.aim,spinDir:p.spinDir,spinAge:p.spinAge,samples:p.aimSamples.map(s=>({...s})),at:this.time};p.charging=false;}
  if(i.set&&!prev.set)p.buffer={kind:'set',life:.23,power:0};if(i.receive&&!prev.receive)p.buffer={kind:'receive',life:.24,power:0};
  p.block=i.block&&!p.ground&&p.energy>5&&p.dive<=0;
  this.kernel.movement(p,move,dt,1+(c.stats[1]-5)*.025,1+(c.stats[4]-5)*.025);
  if(i.ability&&!prev.ability)this.ability(p);p.previous={...i};
  }
- for(const p of this.players){if(p.buffer){p.buffer.life-=dt;const done=p.buffer.kind==='attack'?this.attack(p):this.contact(p,p.buffer.kind);if(done||p.buffer.life<=0)p.buffer=null;}
+ for(const p of this.players){if(p.buffer){p.buffer.life-=dt;const done=p.buffer.kind==='attack'?this.attack(p):this.contact(p,p.buffer.kind);if(!done&&p.buffer.life<=0&&p.buffer.kind==='attack'&&!p.bot)this.notice(p,p.hitCD>0?'ATAQUE EM RECARGA':'ATAQUE SEM CONTATO');if(done||p.buffer.life<=0)p.buffer=null;}
  if(p.input.receive&&this.ball.vy>100&&this.ball.y>p.y-165&&!(this.ball.last===p.side&&p.lastKind==='attack'&&this.ball.vx*(p.side?-1:1)>0))this.contact(p,'receive');}
  if(this.phase==='point'){if(this.phaseTime>=1.8)this.setupServe();return;}if(this.phase==='serve'){this.ball.x=this.server.x;this.ball.y=this.server.y-110;if(this.phaseTime>8)this.toss(this.server);return;}if(this.phase!=='rally')return;
  const b=this.ball,old={x:b.x,y:b.y};b.age+=dt;b.blockCD=Math.max(0,b.blockCD-dt);
@@ -113,5 +113,5 @@ export class Match{
  this.events=this.events.filter(e=>this.time-e.t<3).slice(-40);this.pings=this.pings.filter(e=>this.time-e.t<2);
  }
  lastTouchOpponent(){const p=this.players.find(p=>p.id===this.lastPlayer);return p?1-p.side:1-this.serveSide;}
- snapshot(){return{id:this.id,engine:'v41-shared-gdd-0.7',world:WORLD,mode:this.mode,ranked:this.ranked,training:this.training,placement:this.placement??null,time:this.time,score:this.score,touches:this.touches,phase:this.phase,reason:this.reason,server:this.server.id,ball:this.ball,attraction:this.attraction,winner:this.winner,results:this.results,settlementPending:!!this.settlementPending,pings:this.pings,events:this.events.slice(-20),players:this.players.map(p=>({id:p.id,name:p.name,side:p.side,character:p.character,appearance:p.appearance,elo:p.elo,bot:!!p.bot,difficulty:p.bot?p.profile.id:undefined,x:p.x,y:p.y,vx:p.vx,vy:p.vy,energy:p.energy,cooldown:p.cooldown,charge:p.charge,charging:p.charging,spinDir:p.spinDir,seq:p.seq,movementInput:{left:p.previous.left,right:p.previous.right,jump:p.previous.jump,dash:p.previous.dash,dive:p.previous.dive,block:p.previous.block},coyote:p.coyote,jumpbuf:p.jumpbuf,diveCD:p.diveCD,block:p.block,dive:p.dive,diveDir:p.diveDir,diveSaved:p.diveSaved,ground:p.ground,facing:p.facing,land:p.land,rotation:p.rotation,dash:p.dash,dashCD:p.dashCD,airDash:p.airDash,lastKind:p.lastKind,touchAnim:p.touchAnim,hitCD:p.hitCD,aim:p.input.aim,notice:this.time<p.noticeUntil?p.notice:'',disconnected:p.disconnectedAt!==null}))};}
+ snapshot(){return{id:this.id,engine:'v41-shared-gdd-0.7',world:WORLD,mode:this.mode,ranked:this.ranked,training:this.training,placement:this.placement??null,time:this.time,score:this.score,touches:this.touches,phase:this.phase,reason:this.reason,server:this.server.id,ball:this.ball,attraction:this.attraction,winner:this.winner,results:this.results,settlementPending:!!this.settlementPending,pings:this.pings,events:this.events.slice(-20),players:this.players.map(p=>({id:p.id,name:p.name,side:p.side,character:p.character,appearance:p.appearance,elo:p.elo,bot:!!p.bot,difficulty:p.bot?p.profile.id:undefined,x:p.x,y:p.y,vx:p.vx,vy:p.vy,energy:p.energy,cooldown:p.cooldown,charge:p.charge,charging:p.charging,spinDir:p.spinDir,seq:p.seq,processedSeq:p.processedSeq,movementInput:{left:p.previous.left,right:p.previous.right,jump:p.previous.jump,dash:p.previous.dash,dive:p.previous.dive,block:p.previous.block},coyote:p.coyote,jumpbuf:p.jumpbuf,diveCD:p.diveCD,block:p.block,dive:p.dive,diveDir:p.diveDir,diveSaved:p.diveSaved,ground:p.ground,facing:p.facing,land:p.land,rotation:p.rotation,dash:p.dash,dashCD:p.dashCD,airDash:p.airDash,lastKind:p.lastKind,touchAnim:p.touchAnim,hitCD:p.hitCD,aim:p.input.aim,notice:this.time<p.noticeUntil?p.notice:'',disconnected:p.disconnectedAt!==null}))};}
 }
