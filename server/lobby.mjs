@@ -2,7 +2,7 @@ import { randomUUID,randomBytes } from 'node:crypto';
 import { Match } from './simulation.mjs';
 import { queueWindow,teamRating,botProfile,placementProfile } from './rules.mjs';
 export class Lobby {
- constructor(store){this.store=store;this.queues=[];this.parties=new Map();this.partyRevision=0;this.partyInstance=randomUUID();this.matches=new Map();this.active=new Map();this.streams=new Map();this.latency=new Map();this.acc=0;this.last=performance.now();this.lastPublish=0;}
+ constructor(store){this.store=store;this.queues=[];this.parties=new Map();this.partyRevision=0;this.partyInstance=randomUUID();this.matches=new Map();this.active=new Map();this.streams=new Map();this.latency=new Map();this.settling=new Set();this.acc=0;this.last=performance.now();this.lastPublish=0;}
  send(id,type,data){const stream=this.streams.get(id);if(stream&&!stream.res.destroyed&&!stream.res.writableEnded){if(stream.res.writableLength>256000){stream.res.destroy();return;}stream.res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);}}
  connected(id){const res=this.streams.get(id)?.res;return !!res&&!res.destroyed&&!res.writableEnded;}
  queueSnapshot(id){const q=this.queues.find(q=>q.ids.includes(id));return q?{active:true,at:q.at,mode:q.mode,region:q.region,placement:q.placementGames===null?null:{game:q.placementGames+1,total:10,bot:placementProfile(q.placementGames).name}}:{active:false};}
@@ -36,7 +36,7 @@ export class Lobby {
  removeQueue(q,reason){this.queues=this.queues.filter(x=>x!==q);q.ids.forEach(id=>this.send(id,'queue',{active:false,reason}));}
  enqueue(id,mode,region){if(!['1v1','2v2'].includes(mode))throw new Error('Modo inválido');if(region!=='local')throw new Error('Região não disponível neste servidor');if(this.matches.size>=100)throw new Error('Servidor cheio');
  const p=this.partyFor(id);let ids=[id];if(p){if(mode!=='2v2'||p.leader!==id||p.members.length!==2||p.members.some(m=>!m.ready))throw new Error('Party precisa de dois membros prontos e líder');ids=[id,...p.members.filter(m=>m.id!==id).map(m=>m.id)];}
- for(const uid of ids){if(!this.connected(uid))throw new Error('Membro desconectado');if(this.active.has(uid)||this.queues.some(q=>q.ids.includes(uid)))throw new Error('Jogador já está ocupado');const a=this.store.get(uid);if(a.blockedUntil>Date.now())throw new Error('Bloqueio temporário por abandono');const l=this.latency.get(uid);if(!l||Date.now()-l.at>10000||l.ms>220)throw new Error('Aguarde medir a conexão; latência máxima: 220 ms');}
+ for(const uid of ids){if(!this.connected(uid))throw new Error('Membro desconectado');if(this.store.isBusy?.(uid)||this.settling.has(uid)||this.active.has(uid)||this.queues.some(q=>q.ids.includes(uid)))throw new Error('Jogador já está ocupado');const a=this.store.get(uid);if(a.blockedUntil>Date.now())throw new Error('Bloqueio temporário por abandono');const l=this.latency.get(uid);if(!l||Date.now()-l.at>10000||l.ms>220)throw new Error('Aguarde medir a conexão; latência máxima: 220 ms');}
  const ratings=ids.map(uid=>this.store.get(uid).modes[mode].elo);if(ids.length===2&&Math.abs(ratings[0]-ratings[1])>400)throw new Error('Party excede 400 pontos de diferença');
  const placement=ids.map(uid=>this.store.get(uid).modes[mode].games).filter(n=>n<10);
  const q={placementGames:placement.length?Math.min(...placement):null,id:randomUUID(),ids,mode,region,rating:teamRating(ratings),at:Date.now()};this.queues.push(q);ids.forEach(uid=>this.send(uid,'queue',{active:true,at:q.at,mode,region,placement:q.placementGames===null?null:{game:q.placementGames+1,total:10,bot:placementProfile(q.placementGames).name}}));return {at:q.at};
@@ -48,18 +48,30 @@ export class Lobby {
  ids.forEach(id=>players.push(this.makePlayer(id,side,mode,char)));
  if(!free)while(players.filter(p=>p.side===side).length<(mode==='2v2'?2:1))players.push(this.bot(side,rating,players.length,botPreset||botProfile(rating)));}
  const humans=players.filter(p=>!p.bot);if(humans.some(p=>this.active.has(p.id)))throw new Error('Reserva já existe');
- const m=new Match({mode,players,ranked,training,onFinish:match=>{try{match.results=this.store.settle(match.record());for(const p of humans)this.send(p.id,'profile',this.store.get(p.id));}catch(e){console.error('Falha ao persistir resultado',match.id);match.results={error:'Resultado pendente. Contate o operador com o ID da partida.'};}}});
+ const m=new Match({mode,players,ranked,training,onFinish:match=>{try{const pending=this.persistResult(match);pending?.catch?.(()=>{});}catch{}}});
+
  m.placement=placementGames===null?null:{game:placementGames+1,total:10,bot:botPreset.id};m.free=free;this.matches.set(m.id,m);for(const p of humans){this.active.set(p.id,m.id);this.send(p.id,'match',m.snapshot());}return m;
  }
- training(id,{character:char,elo,kind}){if(this.active.has(id)||this.queues.some(q=>q.ids.includes(id)))throw new Error('Saia da partida ou fila');if(this.matches.size>=100)throw new Error('Servidor cheio');const p=this.partyFor(id);if(p)throw new Error('Saia da party para treinar');const m=this.start([[id],[]],'1v1',{ranked:false,training:kind==='free'||kind==='tutorial',character:char,botElo:elo,free:kind==='free'||kind==='tutorial'});return {match:m.id};}
+ training(id,{character:char,elo,kind}){if(this.store.isBusy?.(id)||this.settling.has(id)||this.active.has(id)||this.queues.some(q=>q.ids.includes(id)))throw new Error('Saia da partida ou fila');if(this.matches.size>=100)throw new Error('Servidor cheio');const p=this.partyFor(id);if(p)throw new Error('Saia da party para treinar');const m=this.start([[id],[]],'1v1',{ranked:false,training:kind==='free'||kind==='tutorial',character:char,botElo:elo,free:kind==='free'||kind==='tutorial'});return {match:m.id};}
+ persistResult(m){
+ if(m.settlementPending)return m.settlement;
+ const ids=m.players.filter(p=>!p.bot).map(p=>p.id);ids.forEach(id=>this.settling.add(id));m.settlementPending=true;
+ const done=results=>{m.retryAttempts=0;m.retryAt=0;m.results=results;m.settlementPending=false;ids.forEach(id=>{this.settling.delete(id);this.send(id,'profile',this.store.get(id));});return results;};
+ const failed=()=>{m.retryAt=Date.now()+Math.min(60000,1000*2**Math.min(6,m.retryAttempts=(m.retryAttempts||0)+1));m.settlementPending=false;m.results={error:'Resultado ainda não salvo. O banco está indisponível; tente Voltar ao lobby novamente para salvar.'};console.error('Resultado pendente',m.id);throw Object.assign(new Error(m.results.error),{status:503});};
+ try{const result=this.store.settle(m.record());if(result?.then){m.settlement=Promise.resolve(result).then(done).catch(failed);return m.settlement;}return done(result);}catch(e){if(m.settlementPending)return failed();throw e;}
+ }
  leave(id,expectedId){const current=this.active.get(id),mid=expectedId||current,m=this.matches.get(mid);
  // Idempotent acknowledgment also covers expired games and missed SSE messages.
  if(!m||current!==mid){if(current===mid)this.active.delete(id);const result={left:true,matchId:mid||null};this.send(id,'left',result);return result;}
  if(m.phase!=='ended'){if(m.ranked&&!m.started){m.ranked=false;m.end(1,'Cancelada antes do primeiro saque');}else if(m.ranked){m.abandoned.add(id);m.end(1-m.players.find(p=>p.id===id).side,'Abandono');}else{m.ranked=false;m.end(1,'Treino encerrado');}}
- if(this.active.get(id)===mid)this.active.delete(id);const result={left:true,matchId:mid};this.send(id,'left',result);
- if(m.players.filter(p=>!p.bot).every(p=>this.active.get(p.id)!==mid))this.matches.delete(mid);return result;
+ if(m.results?.error){const retry=this.persistResult(m);if(retry?.then)return retry.then(()=>this.release(id,mid,m));}
+ if(m.settlementPending)return m.settlement.then(()=>this.release(id,mid,m));
+ return this.release(id,mid,m);
  }
- cleanup(now=Date.now()){for(const [mid,m]of this.matches){if(m.phase!=='ended')continue;m.timeEnd??=now;if(now-m.timeEnd<=120000)continue;
+ release(id,mid,m){if(this.active.get(id)===mid)this.active.delete(id);const result={left:true,matchId:mid};this.send(id,'left',result);
+ if(m.players.filter(p=>!p.bot).every(p=>this.active.get(p.id)!==mid))this.matches.delete(mid);return result;}
+
+ cleanup(now=Date.now()){for(const [mid,m]of this.matches){if(m.phase!=='ended'||m.settlementPending||m.results?.error)continue;m.timeEnd??=now;if(now-m.timeEnd<=120000)continue;
  for(const p of m.players.filter(p=>!p.bot))if(this.active.get(p.id)===mid){this.active.delete(p.id);this.send(p.id,'left',{left:true,matchId:mid,reason:'Resultado salvo no histórico'});}
  this.matches.delete(mid);
  }}
@@ -102,5 +114,5 @@ export class Lobby {
  }
  for(const [code,p] of this.parties)if(now-p.created>15*60e3&&p.members.length<2&&!this.queues.some(q=>q.ids.includes(p.leader))){this.parties.delete(code);this.notifyParty(null,p.members.map(m=>m.id));}
  }
- loop(){const t=performance.now(),elapsed=Math.min(.1,(t-this.last)/1000);this.last=t;this.acc+=elapsed;while(this.acc>=1/120){for(const m of this.matches.values())m.step();this.acc-=1/120;}if(t-this.lastPublish>=40){this.lastPublish=t;for(const m of this.matches.values()){for(const p of m.players.filter(p=>!p.bot))if(this.active.get(p.id)===m.id)this.send(p.id,'snapshot',m.snapshot());}this.cleanup();}}
+ loop(){const t=performance.now(),elapsed=Math.min(.1,(t-this.last)/1000);this.last=t;this.acc+=elapsed;while(this.acc>=1/120){for(const m of this.matches.values())m.step();this.acc-=1/120;}if(t-this.lastPublish>=40){this.lastPublish=t;for(const m of this.matches.values()){if(m.phase==='ended'&&m.results?.error&&!m.settlementPending&&Date.now()>=(m.retryAt||0)){try{this.persistResult(m)?.catch?.(()=>{});}catch{}}for(const p of m.players.filter(p=>!p.bot))if(this.active.get(p.id)===m.id)this.send(p.id,'snapshot',m.snapshot());}this.cleanup();}}
 }

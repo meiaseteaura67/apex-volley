@@ -1,7 +1,20 @@
 {
-  "name": "apex-volley", "version": "0.9.8", "private": true, "type": "module",
+  "name": "apex-volley",
+  "version": "0.9.9",
+  "private": true,
+  "type": "module",
   "description": "APEX Volley — implementação de referência autoritativa do GDD v1.0",
-  "engines": {"node": ">=24.0.0"},
-  "scripts": {"start": "node --env-file-if-exists=.env server/index.mjs", "dev": "node --env-file-if-exists=.env server/dev.mjs", "test": "node --test test/*.test.mjs"},
-  "license": "UNLICENSED"
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "node --env-file-if-exists=.env server/dev.mjs",
+    "test": "node --test test/*.test.mjs",
+    "db:import": "node --env-file-if-exists=.env tools/import-sqlite.mjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "pg": "8.23.1"
+  }
 }
