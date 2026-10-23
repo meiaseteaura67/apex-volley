@@ -1,5 +1,6 @@
 import {validateAppearance,DEFAULT_APPEARANCE,PALETTES} from './cosmetics.mjs';
 import http from 'node:http';
+import {WebSocketServer} from 'ws';
 import { readFileSync,chmodSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join,resolve } from 'node:path';
@@ -23,7 +24,7 @@ export function createApp(options={}){
  const store=options.store||new Store(env.DB_PATH||'./var/apex.sqlite'),lobby=new Lobby(store),oauth=new Map();
  if(!options.store)try{chmodSync(env.DB_PATH||'./var/apex.sqlite',0o600);}catch{}
  const apiLimit=new Limiter(400,1000),loginLimit=new Limiter(20,60000),inputLimit=new Limiter(65,1000),actionLimit=new Limiter(40,60000),pingKeys=new Map();
- const publicDir=fileURLToPath(new URL('../public/',import.meta.url));const assets=new Map([['/touch-ui.css',['touch-ui.css','text/css; charset=utf-8']],['/touch-input.js',['touch-input.js','text/javascript; charset=utf-8']],['/touch-ui.js',['touch-ui.js','text/javascript; charset=utf-8']],['/',['index.html','text/html; charset=utf-8']],['/index.html',['index.html','text/html; charset=utf-8']],['/arena',['index.html','text/html; charset=utf-8']],['/arena/',['index.html','text/html; charset=utf-8']],['/classic.css',['classic.css','text/css; charset=utf-8']],['/classic-game.js',['classic-game.js','text/javascript; charset=utf-8']],['/classic-services.css',['classic-services.css','text/css; charset=utf-8']],['/classic-services.js',['classic-services.js','text/javascript; charset=utf-8']],['/v41-physics.js',['v41-physics.js','text/javascript; charset=utf-8']],['/volley-tactics.js',['volley-tactics.js','text/javascript; charset=utf-8']],['/volley-bots.js',['volley-bots.js','text/javascript; charset=utf-8']]]);
+ const publicDir=fileURLToPath(new URL('../public/',import.meta.url));const assets=new Map([['/touch-ui.css',['touch-ui.css','text/css; charset=utf-8']],['/touch-input.js',['touch-input.js','text/javascript; charset=utf-8']],['/touch-ui.js',['touch-ui.js','text/javascript; charset=utf-8']],['/',['index.html','text/html; charset=utf-8']],['/index.html',['index.html','text/html; charset=utf-8']],['/arena',['index.html','text/html; charset=utf-8']],['/arena/',['index.html','text/html; charset=utf-8']],['/classic.css',['classic.css','text/css; charset=utf-8']],['/classic-game.js',['classic-game.js','text/javascript; charset=utf-8']],['/classic-services.css',['classic-services.css','text/css; charset=utf-8']],['/classic-services.js',['classic-services.js','text/javascript; charset=utf-8']],['/network-prediction.js',['network-prediction.js','text/javascript; charset=utf-8']],['/v41-physics.js',['v41-physics.js','text/javascript; charset=utf-8']],['/volley-tactics.js',['volley-tactics.js','text/javascript; charset=utf-8']],['/volley-bots.js',['volley-bots.js','text/javascript; charset=utf-8']]]);
  const cookie=(name,value,age)=>`${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${urlOrigin.protocol==='https:'?'; Secure':''}`;
  const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  function session(req){const value=cookies(req).apex_session;if(!value||value.length>100)return null;const row=store.getSession(hash(value));return row&&store.get(row.account)?row:null;}
@@ -39,8 +40,8 @@ export function createApp(options={}){
  const ip=req.socket.remoteAddress||'unknown';if(!apiLimit.allow(ip))return json(res,429,{error:'Muitas solicitações; aguarde'});
  if(req.method==='GET'&&assets.has(path)){const [file,type]=assets.get(path);res.writeHead(200,{'Content-Type':type});res.end(readFileSync(file==='index.html'?fileURLToPath(new URL('../index.html',import.meta.url)):join(publicDir,file)));return;}
  if(path==='/favicon.ico'){res.writeHead(204);res.end();return;}
- if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,version:'0.9.9',storage:store.kind||'sqlite'});
- if(path==='/api/config'&&req.method==='GET')return json(res,200,{characters:CHARACTERS,botBands:BOT_BANDS,placementBots:PLACEMENT_BOTS,botPresets:BOT_PRESETS.map(({id,name,sampleElo})=>({id,name,sampleElo})),appearance:DEFAULT_APPEARANCE,palettes:PALETTES,devLogin:dev,google:!!env.GOOGLE_CLIENT_ID,region:'local',version:'0.9.9',serverTime:Date.now()});
+ if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,version:'0.9.10',storage:store.kind||'sqlite'});
+ if(path==='/api/config'&&req.method==='GET')return json(res,200,{characters:CHARACTERS,botBands:BOT_BANDS,placementBots:PLACEMENT_BOTS,botPresets:BOT_PRESETS.map(({id,name,sampleElo})=>({id,name,sampleElo})),appearance:DEFAULT_APPEARANCE,palettes:PALETTES,devLogin:dev,google:!!env.GOOGLE_CLIENT_ID,region:'local',version:'0.9.10',serverTime:Date.now()});
  if(path==='/auth/google'&&req.method==='GET'){
  if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return json(res,503,{error:'Google OAuth não configurado pelo operador'});if(!loginLimit.allow(ip))return json(res,429,{error:'Aguarde'});
  if(oauth.size>500)return json(res,503,{error:'Autenticação ocupada'});const state=token(),nonce=token(),verifier=token(),binding=token();oauth.set(state,{nonce,verifier,binding:hash(binding),expires:Date.now()+300000});
@@ -102,13 +103,39 @@ export function createApp(options={}){
  return json(res,404,{error:'Não encontrado'});
  }catch(e){if(!res.headersSent)json(res,e.status||400,{error:e.message?.slice(0,160)||'Solicitação inválida'});else res.end();}
  });
+ // Input-only channel: snapshots, ownership and reconnect remain on authenticated SSE.
+ const wss=new WebSocketServer({noServer:true,maxPayload:16384,perMessageDeflate:false});
+ const controls=new Map(),upgradeLimit=new Limiter(30,60000);
+ server.on('upgrade',(req,socket,head)=>{
+  const reject=()=>{socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');};
+  if(req.url!=='/api/control'||req.headers.host!==urlOrigin.host||req.headers.origin!==origin||!upgradeLimit.allow(req.socket.remoteAddress||'unknown'))return reject();
+  const user=session(req);if(!user)return reject();
+  wss.handleUpgrade(req,socket,head,ws=>{
+   let authorized=false,ownedToken='',messages=0,windowAt=Date.now();
+   const timeout=setTimeout(()=>ws.close(1008,'Handshake required'),5000);
+   ws.on('error',()=>{});
+   ws.on('close',()=>{clearTimeout(timeout);if(controls.get(user.account)===ws)controls.delete(user.account);});
+   ws.on('message',(raw,binary)=>{try{
+    const now=Date.now();if(now-windowAt>=1000){windowAt=now;messages=0;}if(++messages>80||binary)throw Error('Rate or format');
+    const data=JSON.parse(raw.toString()),current=session(req),entry=lobby.streams.get(user.account);
+    if(!current||current.hash!==user.hash||!entry||entry.session!==user.hash||!lobby.connected(user.account))throw Error('Session expired');
+    if(!authorized){if(data.type!=='hello'||!safeEqual(data.csrf,current.csrf)||!safeEqual(data.controlToken,entry.controlToken))throw Error('Control denied');
+     authorized=true;ownedToken=data.controlToken;clearTimeout(timeout);controls.get(user.account)?.close(1008,'Replaced');controls.set(user.account,ws);ws.send(JSON.stringify({type:'ready'}));return;}
+    if(!safeEqual(ownedToken,entry.controlToken)||!safeEqual(data.controlToken,ownedToken))throw Error('Control replaced');
+    if(data.type!=='input')throw Error('Invalid message');
+    const m=lobby.matches.get(lobby.active.get(user.account));if(!m||data.matchId!==m.id){ws.send(JSON.stringify({type:'stale'}));return;}
+    if(!Array.isArray(data.commands)||!data.commands.length||data.commands.length>16)throw Error('Invalid batch');
+    for(const command of data.commands){if(!inputLimit.allow(user.account)||!m.input(user.account,command))throw Error('Invalid input');}
+   }catch{ws.close(1008,'Invalid control');}});
+  });
+ });
  server.on('connection',socket=>socket.setNoDelay(true));
  server.requestTimeout=10000;server.headersTimeout=10000;server.keepAliveTimeout=5000;server.maxHeadersCount=40;
  const intervals=[];
  let maintaining=false;
  async function maintain(){if(maintaining)return;maintaining=true;try{for(const [k,v]of oauth)if(v.expires<Date.now())oauth.delete(k);await store.maintenance();for(const [id,s]of lobby.streams)if(!store.getSession(s.session))s.res.end();}catch{console.error('Manutenção do banco indisponível; nova tentativa no próximo ciclo.');}finally{maintaining=false;}}
  function startTimers(){intervals.push(setInterval(()=>lobby.loop(),4),setInterval(()=>lobby.tick(),100),setInterval(maintain,60000));}
- async function close(){intervals.forEach(clearInterval);for(const {res} of lobby.streams.values())res.end();await new Promise(r=>server.close(r));server.closeAllConnections();await store.close();}
+ async function close(){intervals.forEach(clearInterval);for(const ws of wss.clients)ws.terminate();wss.close();for(const {res} of lobby.streams.values())res.end();await new Promise(r=>server.close(r));server.closeAllConnections();await store.close();}
  return {server,store,lobby,host,origin,startTimers,close};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

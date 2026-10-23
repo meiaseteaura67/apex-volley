@@ -2,7 +2,7 @@
 // Additive GDD services: the v4.1 canvas renderer, skins, UI and WebAudio stay in classic-game.js.
 (()=>{
  const bridge=window.apexNetwork,$=id=>document.getElementById(id);
- const S={config:null,initError:'',resultSignature:'',profile:null,csrf:'',stream:null,match:null,queue:null,party:null,partyRevision:-1,partyInstance:null,partyEpoch:0,partyBusy:false,partyCode:'',seq:0,inputEpoch:0,inputController:null,controlToken:null,replaced:false,rankingRequest:0,closedMatches:new Set(),offset:0,page:'home',error:'',busy:false,inputs:[],sending:false,ended:null,pendingSummon:null,hudProfiles:{},hud:{},editor:false};
+ const S={config:null,initError:'',resultSignature:'',profile:null,csrf:'',stream:null,match:null,queue:null,party:null,partyRevision:-1,partyInstance:null,partyEpoch:0,partyBusy:false,partyCode:'',socket:null,socketReady:false,socketRetry:0,seq:0,inputEpoch:0,inputController:null,controlToken:null,replaced:false,rankingRequest:0,closedMatches:new Set(),offset:0,page:'home',error:'',busy:false,inputs:[],sending:false,ended:null,pendingSummon:null,hudProfiles:{},hud:{},editor:false};
  const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const button=(text,fn,cls)=>{const b=node('button',text,cls);b.type='button';b.onclick=()=>Promise.resolve().then(fn).catch(fail);return b;};
  const add=(parent,...children)=>{children.forEach(c=>parent.append(c));return parent;};
@@ -26,7 +26,7 @@
  add(quick,button('Nova bola',()=>api('feed',{}),'small'),button('Sair',leave,'small'));
  const pingRow=node('div',undefined,'gdd-pings');pingRow.hidden=true;['Minha','Sua','Levanta','Cubro atrás','Boa'].forEach(text=>pingRow.append(button(text,()=>api('ping',{text}),'small')));$('app').append(pingRow);
  function refreshLabel(){accountButton.textContent=S.profile?`Arena · ${S.profile.name}`:'Arena / conta';topButton.textContent=S.profile?'Arena ●':'Arena';}
- function applyProfile(p,load=false){if(S.profile?.id!==p?.id){S.partyEpoch++;S.party=null;S.partyRevision=-1;S.partyInstance=null;S.partyBusy=false;S.partyCode='';S.pendingSummon=null;S.busy=false;S.queue=null;S.controlToken=null;S.replaced=false;resetInputs();S.stream?.close();S.stream=null;}window.ApexMobile?.clear();S.profile=p;if(load&&p){try{const pending=JSON.parse(localStorage.getItem('apex-operation-'+p.id)||'null');if(pending&&/^[a-zA-Z0-9-]{16,80}$/.test(pending.operationId)&&[1,10].includes(pending.count))S.pendingSummon=pending;}catch{}}if(load&&p){bridge.loadPreferences({appearance:p.appearance,binds:p.settings.binds,prefs:p.settings});S.hudProfiles=p.settings.hudProfiles||{};S.hud=S.hudProfiles[deviceClass()]||p.settings.hud||{};}window.ApexMobile?.configure(hudConfig());refreshLabel();if(dialog.open&&['home','characters','summon'].includes(S.page))render();}
+ function applyProfile(p,load=false){if(S.profile?.id!==p?.id){S.partyEpoch++;S.party=null;S.partyRevision=-1;S.partyInstance=null;S.partyBusy=false;S.partyCode='';S.pendingSummon=null;S.busy=false;S.queue=null;closeControl();S.controlToken=null;S.replaced=false;resetInputs();S.stream?.close();S.stream=null;}window.ApexMobile?.clear();S.profile=p;if(load&&p){try{const pending=JSON.parse(localStorage.getItem('apex-operation-'+p.id)||'null');if(pending&&/^[a-zA-Z0-9-]{16,80}$/.test(pending.operationId)&&[1,10].includes(pending.count))S.pendingSummon=pending;}catch{}}if(load&&p){bridge.loadPreferences({appearance:p.appearance,binds:p.settings.binds,prefs:p.settings});S.hudProfiles=p.settings.hudProfiles||{};S.hud=S.hudProfiles[deviceClass()]||p.settings.hud||{};}window.ApexMobile?.configure(hudConfig());refreshLabel();if(dialog.open&&['home','characters','summon'].includes(S.page))render();}
  function updateParty(data){
   if(!S.profile||!data||typeof data.revision!=='number')return;
   if(data.instance===S.partyInstance&&data.revision<S.partyRevision)return;
@@ -40,21 +40,21 @@
   catch(error){if(epoch===S.partyEpoch&&S.profile?.id===profile)throw error;}
   finally{if(epoch===S.partyEpoch&&S.profile?.id===profile){S.partyBusy=false;if(S.page==='party')render();}}
  }
- function connect(){S.controlToken=null;S.replaced=false;resetInputs();S.stream?.close();const stream=S.stream=new EventSource('/api/events'),epoch=S.partyEpoch;
+ function connect(){closeControl();S.controlToken=null;S.replaced=false;resetInputs();S.stream?.close();const stream=S.stream=new EventSource('/api/events'),epoch=S.partyEpoch;
  const on=(type,fn)=>stream.addEventListener(type,e=>{if(stream!==S.stream||epoch!==S.partyEpoch||S.replaced)return;try{fn(JSON.parse(e.data));}catch(err){fail(err);}});
- on('control',data=>{resetInputs();S.controlToken=data.token;});
+ on('control',data=>{resetInputs();S.controlToken=data.token;connectControl();});
  on('ping',p=>{const t=performance.now();api('pong',p).then(()=>{S.rtt=Math.round(performance.now()-t);}).catch(fail);});
  on('profile',p=>applyProfile(p));on('party',updateParty);
  on('queue',updateQueue);
  on('match',snapshot=>{if(S.closedMatches.has(snapshot.id))return;const same=S.match?.id===snapshot.id;S.queue=null;resetInputs();S.ended=null;const serverSeq=(snapshot.players.find(p=>p.id===S.profile?.id)?.seq??-1)+1;S.seq=same?Math.max(S.seq,serverSeq):serverSeq;dialog.close();receive(snapshot);});on('snapshot',receive);
  on('left',data=>resetMatch(data.matchId));
  on('idle',data=>{S.queue=null;if(data.profile)applyProfile(data.profile);const stale=S.match?.id;if(stale||bridge.active()){resetMatch(stale);if(data.profile)applyProfile(data.profile);status.textContent='A partida não está mais ativa. Confira o histórico para resultados concluídos.';}});
- on('replaced',()=>{S.replaced=true;S.controlToken=null;resetInputs();stream.close();bridge.clear();show('home');fail(new Error('Conta aberta em outra janela. Atualize esta janela para reconectar.'));});
- stream.onerror=()=>{if(stream!==S.stream||S.replaced)return;S.controlToken=null;resetInputs();if(S.match){bridge.clear();live.textContent='Reconectando · comandos suspensos';}};
+ on('replaced',()=>{S.replaced=true;closeControl();S.controlToken=null;resetInputs();stream.close();bridge.clear();show('home');fail(new Error('Conta aberta em outra janela. Atualize esta janela para reconectar.'));});
+ stream.onerror=()=>{if(stream!==S.stream||S.replaced)return;closeControl();S.controlToken=null;resetInputs();if(S.match){bridge.clear();live.textContent='Reconectando · comandos suspensos';}};
  }
  function updateQueue(q){if(S.replaced)return;S.queue=q.active&&!S.match?q:null;if(S.queue)show('queue');else if(!S.match&&dialog.open&&S.page==='queue'){S.page='home';render();status.textContent=q.reason||'Busca encerrada.';}}
  async function cancelQueue(){const epoch=S.partyEpoch,at=S.queue?.at;const data=await api('cancel',{});if(epoch===S.partyEpoch&&!S.match&&(!S.queue||S.queue.at===at))updateQueue(data.queue);}
- function resetInputs(){S.inputEpoch++;S.inputController?.abort();S.inputController=null;S.sending=false;S.inputs=[];}
+ function resetInputs(){bridge.suspend?.();S.inputEpoch++;S.inputController?.abort();S.inputController=null;S.sending=false;S.inputs=[];}
  function resetMatch(matchId){if(S.match&&(!matchId||S.match.id!==matchId))return false;const old=S.match?.id||matchId;if(old){S.closedMatches.add(old);if(S.closedMatches.size>32)S.closedMatches.delete(S.closedMatches.values().next().value);}S.match=null;S.ended=null;S.seq=0;resetInputs();window.ApexMobile?.clear();window.ApexMobile?.closeSettings();for(const d of document.querySelectorAll('dialog[open]'))if(d!==dialog)d.close();bridge.exit();document.body.classList.remove('gdd-network');live.hidden=quick.hidden=pingRow.hidden=true;touch.replaceChildren();show('home');return true;}
  function receive(snapshot){if(!S.profile||S.closedMatches.has(snapshot.id)||S.match&&S.match.id!==snapshot.id)return;const first=!S.match||S.match.id!==snapshot.id;S.match=snapshot;document.body.classList.add('gdd-network');bridge.apply(snapshot,S.profile.id);live.hidden=false;quick.hidden=false;pingRow.hidden=snapshot.mode!=='2v2';quick.firstChild.hidden=snapshot.ranked||!snapshot.training;
  const own=snapshot.players.find(p=>p.id===S.profile.id),c=character(own.character);
@@ -63,12 +63,19 @@
  const signature=JSON.stringify([snapshot.settlementPending,snapshot.results]);if(snapshot.phase==='ended'&&S.ended===snapshot.id&&dialog.open&&S.page==='result'&&signature!==S.resultSignature)render();if(snapshot.phase==='ended')S.resultSignature=signature;
  if(snapshot.phase==='ended'&&S.ended!==snapshot.id){S.ended=snapshot.id;resetInputs();bridge.clear();window.ApexMobile?.closeSettings();for(const d of document.querySelectorAll('dialog[open]'))if(d!==dialog)d.close();show('result');}
  }
+ function closeControl(){clearTimeout(S.socketRetry);const ws=S.socket;S.socket=null;S.socketReady=false;if(ws)ws.close();}
+ function connectControl(){closeControl();if(!S.controlToken||S.replaced||!S.profile)return;const token=S.controlToken;
+ const ws=S.socket=new WebSocket(location.origin.replace(/^http/,'ws')+'/api/control');
+ ws.onopen=()=>{if(ws!==S.socket||token!==S.controlToken)return ws.close();ws.send(JSON.stringify({type:'hello',csrf:S.csrf,controlToken:token}));};
+ ws.onmessage=e=>{if(ws!==S.socket||token!==S.controlToken)return;try{const data=JSON.parse(e.data);if(data.type==='ready'){S.socketReady=true;drain();}}catch{ws.close();}};
+ ws.onerror=()=>{};ws.onclose=()=>{if(ws!==S.socket)return;S.socket=null;S.socketReady=false;if(S.controlToken===token&&!S.replaced)S.socketRetry=setTimeout(connectControl,3000);};
+ }
  function scheduleInput(cancel=false){if(!S.match||S.match.phase==='ended'||!S.profile||!S.controlToken||S.replaced)return;const input=bridge.input(cancel);if(cancel)for(const k of Object.keys(input))if(typeof input[k]==='boolean'&&k!=='cancel')input[k]=false;
- S.inputs.push({...input,seq:S.seq++,time:Date.now()+S.offset});if(S.inputs.length>14)S.inputs.splice(0,S.inputs.length-14);drain();}
- async function drain(){if(S.sending||!S.match||S.match.phase==='ended'||!S.controlToken||S.replaced)return;const epoch=S.inputEpoch,matchId=S.match.id,controlToken=S.controlToken,controller=new AbortController();S.sending=true;S.inputController=controller;const timeout=setTimeout(()=>controller.abort(),8000);
- try{while(S.inputs.length&&S.match?.id===matchId&&S.match.phase!=='ended'&&S.inputEpoch===epoch){const commands=S.inputs.splice(0,16);await api('input',{matchId,controlToken,commands},controller.signal);}}
+ bridge.latency?.(S.rtt??0);bridge.resume?.();S.inputs.push({...input,seq:S.seq++,time:Date.now()+S.offset});if(S.inputs.length>14)S.inputs.splice(0,S.inputs.length-14);drain();}
+ async function drain(){if(!S.sending&&S.socketReady&&S.socket?.readyState===WebSocket.OPEN&&S.match&&S.match.phase!=='ended'&&S.controlToken&&!S.replaced){if(S.inputs.length&&S.socket.bufferedAmount<32768)S.socket.send(JSON.stringify({type:'input',matchId:S.match.id,controlToken:S.controlToken,commands:S.inputs.splice(0,16)}));return;}if(S.sending||!S.match||S.match.phase==='ended'||!S.controlToken||S.replaced)return;const epoch=S.inputEpoch,matchId=S.match.id,controlToken=S.controlToken,controller=new AbortController();S.sending=true;S.inputController=controller;const timeout=setTimeout(()=>controller.abort(),8000);
+ try{while(S.inputs.length&&S.match?.id===matchId&&S.match.phase!=='ended'&&S.inputEpoch===epoch&&!S.socketReady){const commands=S.inputs.splice(0,16);await api('input',{matchId,controlToken,commands},controller.signal);}}
  catch(e){if(S.inputEpoch===epoch&&S.match?.id===matchId&&S.match.phase!=='ended'){S.inputs=[];if(e.name!=='AbortError')fail(e);}}
- finally{clearTimeout(timeout);if(S.inputEpoch===epoch){S.sending=false;S.inputController=null;}}}
+ finally{clearTimeout(timeout);if(S.inputEpoch===epoch){S.sending=false;S.inputController=null;if(S.inputs.length)drain();}}}
 
  setInterval(()=>{if(!dialog.open&&!document.hidden)scheduleInput();},1000/30);
  window.addEventListener('blur',()=>bridge.clear());document.addEventListener('visibilitychange',()=>{if(document.hidden)bridge.clear();});
@@ -170,5 +177,5 @@
  }
  async function init(){const started=Date.now();S.config=await api('config');S.offset=Math.round(S.config.serverTime-(started+Date.now())/2);bridge.configure({onInput:scheduleInput,onSave:()=>{clearTimeout(saveTimer);saveTimer=setTimeout(()=>savePreferences().catch(fail),750);},characters:S.config.characters});const me=await api('me');S.csrf=me.csrf||'';applyProfile(me.profile,true);if(me.profile){connect();await refreshParty();}refreshLabel();}
  init().catch(e=>{S.initError=e.message;fail(e);if(dialog.open)render();});
- window.apexArena=Object.freeze({snapshot:()=>({version:'0.9.9',profile:S.profile,match:S.match,queue:S.queue,party:S.party,seq:S.seq}),open:show});
+ window.apexArena=Object.freeze({snapshot:()=>({version:'0.9.10',profile:S.profile,match:S.match,queue:S.queue,party:S.party,seq:S.seq,transport:S.socketReady?'websocket':'http'}),open:show});
 })();

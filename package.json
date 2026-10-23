@@ -1,9 +1,9 @@
 {
   "name": "apex-volley",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "private": true,
   "type": "module",
-  "description": "APEX Volley — implementação de referência autoritativa do GDD v1.0",
+  "description": "APEX Volley \u2014 implementa\u00e7\u00e3o de refer\u00eancia autoritativa do GDD v1.0",
   "engines": {
     "node": ">=24.0.0"
   },
@@ -15,6 +15,7 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "ws": "8.22.0"
   }
 }
