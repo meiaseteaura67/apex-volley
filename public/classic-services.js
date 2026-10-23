@@ -177,5 +177,5 @@
  }
  async function init(){const started=Date.now();S.config=await api('config');S.offset=Math.round(S.config.serverTime-(started+Date.now())/2);bridge.configure({onInput:scheduleInput,onSave:()=>{clearTimeout(saveTimer);saveTimer=setTimeout(()=>savePreferences().catch(fail),750);},characters:S.config.characters});const me=await api('me');S.csrf=me.csrf||'';applyProfile(me.profile,true);if(me.profile){connect();await refreshParty();}refreshLabel();}
  init().catch(e=>{S.initError=e.message;fail(e);if(dialog.open)render();});
- window.apexArena=Object.freeze({snapshot:()=>({version:'0.9.11',profile:S.profile,match:S.match,queue:S.queue,party:S.party,seq:S.seq,transport:S.socketReady?'websocket':'http'}),open:show});
+ window.apexArena=Object.freeze({snapshot:()=>({version:'0.9.12',profile:S.profile,match:S.match,queue:S.queue,party:S.party,seq:S.seq,transport:S.socketReady?'websocket':'http'}),open:show});
 })();

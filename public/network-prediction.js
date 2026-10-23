@@ -47,4 +47,13 @@ function projectBall(source,phase,seconds,attraction=null){
  }
  return q;
 }
-globalThis.ApexMovementPrediction=Object.freeze({create,projectBall});})();
+// Smooth only reconciliation error, not normal flight. This avoids the old
+// permanent interpolation delay: a consistent forecast has zero residual.
+function createBallSmoothing(){let x=0,y=0;
+ return {reset(){x=0;y=0;},correct(previous,next){if(!previous||!next)return;x+=previous.x-next.x;y+=previous.y-next.y;},
+  sample(projected,dt){dt=Math.max(0,Math.min(dt||0,.04));const length=Math.hypot(x,y);
+   if(length>1e-6){const removed=Math.min(length*(1-Math.exp(-dt/.035)),2000*dt);const factor=1-removed/length;x*=factor;y*=factor;}else{x=0;y=0;}
+   return{x:projected.x+x,y:projected.y+y};
+  },residual:()=>({x,y})};
+}
+globalThis.ApexMovementPrediction=Object.freeze({create,projectBall,createBallSmoothing});})();

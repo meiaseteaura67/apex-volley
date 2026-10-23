@@ -40,8 +40,8 @@ export function createApp(options={}){
  const ip=req.socket.remoteAddress||'unknown';if(!apiLimit.allow(ip))return json(res,429,{error:'Muitas solicitações; aguarde'});
  if(req.method==='GET'&&assets.has(path)){const [file,type]=assets.get(path);res.writeHead(200,{'Content-Type':type});res.end(readFileSync(file==='index.html'?fileURLToPath(new URL('../index.html',import.meta.url)):join(publicDir,file)));return;}
  if(path==='/favicon.ico'){res.writeHead(204);res.end();return;}
- if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,version:'0.9.11',storage:store.kind||'sqlite'});
- if(path==='/api/config'&&req.method==='GET')return json(res,200,{characters:CHARACTERS,botBands:BOT_BANDS,placementBots:PLACEMENT_BOTS,botPresets:BOT_PRESETS.map(({id,name,sampleElo})=>({id,name,sampleElo})),appearance:DEFAULT_APPEARANCE,palettes:PALETTES,devLogin:dev,google:!!env.GOOGLE_CLIENT_ID,region:'local',version:'0.9.11',serverTime:Date.now()});
+ if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,version:'0.9.12',storage:store.kind||'sqlite'});
+ if(path==='/api/config'&&req.method==='GET')return json(res,200,{characters:CHARACTERS,botBands:BOT_BANDS,placementBots:PLACEMENT_BOTS,botPresets:BOT_PRESETS.map(({id,name,sampleElo})=>({id,name,sampleElo})),appearance:DEFAULT_APPEARANCE,palettes:PALETTES,devLogin:dev,google:!!env.GOOGLE_CLIENT_ID,region:'local',version:'0.9.12',serverTime:Date.now()});
  if(path==='/auth/google'&&req.method==='GET'){
  if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return json(res,503,{error:'Google OAuth não configurado pelo operador'});if(!loginLimit.allow(ip))return json(res,429,{error:'Aguarde'});
  if(oauth.size>500)return json(res,503,{error:'Autenticação ocupada'});const state=token(),nonce=token(),verifier=token(),binding=token();oauth.set(state,{nonce,verifier,binding:hash(binding),expires:Date.now()+300000});
